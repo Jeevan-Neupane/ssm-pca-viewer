@@ -1,0 +1,253 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{geometry}
+\geometry{margin=1in}
+
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue},
+    commentstyle=\color{gray},
+    stringstyle=\color{red},
+    showstringspaces=false,
+    breaklines=true,
+    frame=single
+}
+
+\title{Statistical Shape Model (SSM) Deformation: \\
+Technical Documentation}
+\author{SSM Visualization Tool}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\section{Introduction}
+
+This document explains the mathematical framework and implementation of Statistical Shape Model (SSM) deformation using Principal Component Analysis (PCA) with particle-based correspondence.
+
+\section{Mathematical Framework}
+
+\subsection{Shape Representation}
+
+A shape is represented by $N$ particles in 3D space:
+\begin{equation}
+\mathbf{P} = \begin{bmatrix}
+x_1 & y_1 & z_1 \\
+x_2 & y_2 & z_2 \\
+\vdots & \vdots & \vdots \\
+x_N & y_N & z_N
+\end{bmatrix} \in \mathbb{R}^{N \times 3}
+\end{equation}
+
+\subsection{PCA Decomposition}
+
+The shape space is decomposed using PCA:
+\begin{equation}
+\mathbf{P} = \bar{\mathbf{P}} + \sum_{i=1}^{M} w_i \sqrt{\lambda_i} \mathbf{v}_i
+\end{equation}
+
+where:
+\begin{itemize}
+    \item $\bar{\mathbf{P}}$ is the mean shape (particles)
+    \item $\lambda_i$ are eigenvalues (variance in mode $i$)
+    \item $\mathbf{v}_i$ are eigenvectors (shape variation modes)
+    \item $w_i$ are weights (typically $w_i \in [-3, 3]$ for $\pm 3\sigma$)
+    \item $M$ is the number of modes
+\end{itemize}
+
+\subsection{Mesh Deformation via Interpolation}
+
+Since particles are sparse, we interpolate deformation to dense mesh vertices using inverse distance weighting (IDW):
+
+\begin{equation}
+\mathbf{M}_{deformed} = \mathbf{M}_{mean} + \sum_{j=1}^{k} \alpha_j \cdot \Delta \mathbf{P}_j
+\end{equation}
+
+where:
+\begin{itemize}
+    \item $\mathbf{M}_{mean}$ is the mean mesh vertex
+    \item $\Delta \mathbf{P}_j$ is displacement of $j$-th nearest particle
+    \item $\alpha_j$ is the interpolation weight
+    \item $k$ is the number of nearest neighbors (typically $k=3$)
+\end{itemize}
+
+The interpolation weights are computed as:
+\begin{equation}
+\alpha_j = \frac{w_j}{\sum_{l=1}^{k} w_l}, \quad w_j = \frac{1}{d_j + \epsilon}
+\end{equation}
+
+where $d_j$ is the distance to the $j$-th nearest particle and $\epsilon = 10^{-10}$ prevents division by zero.
+
+\section{Algorithm}
+
+\begin{algorithm}
+\caption{SSM Shape Reconstruction}
+\begin{algorithmic}[1]
+\State \textbf{Input:} Weights $\mathbf{w} = [w_1, w_2, \ldots, w_M]$
+\State \textbf{Output:} Deformed mesh $\mathbf{M}_{deformed}$
+
+\State \textbf{Step 1: Deform Particles}
+\State $\mathbf{P}_{deformed} \gets \mathbf{P}_{mean}$
+\For{$i = 1$ to $M$}
+    \State $\mathbf{P}_{deformed} \gets \mathbf{P}_{deformed} + w_i \sqrt{\lambda_i} \mathbf{v}_i$
+\EndFor
+
+\State \textbf{Step 2: Compute Particle Displacement}
+\State $\Delta \mathbf{P} \gets \mathbf{P}_{deformed} - \mathbf{P}_{mean}$
+
+\State \textbf{Step 3: Interpolate to Mesh Vertices}
+\State $\mathbf{M}_{deformed} \gets \mathbf{M}_{mean}$
+\For{each vertex $v$ in mesh}
+    \State Find $k$ nearest particles to $v$
+    \State Compute interpolation weights $\alpha_1, \ldots, \alpha_k$
+    \State $\mathbf{M}_{deformed}[v] \gets \mathbf{M}_{mean}[v] + \sum_{j=1}^{k} \alpha_j \cdot \Delta \mathbf{P}_j$
+\EndFor
+
+\State \textbf{return} $\mathbf{M}_{deformed}$
+\end{algorithmic}
+\end{algorithm}
+
+\section{Numerical Example}
+
+\subsection{Setup}
+
+Consider a simple 2D example with:
+\begin{itemize}
+    \item 3 particles: $\mathbf{P}_{mean} = \begin{bmatrix} 0 & 0 \\ 1 & 0 \\ 0.5 & 1 \end{bmatrix}$
+    \item 1 mode with $\lambda_1 = 0.25$, $\mathbf{v}_1 = \begin{bmatrix} 0.1 & 0 \\ 0.1 & 0 \\ 0 & 0.2 \end{bmatrix}$
+    \item Weight: $w_1 = 2.0$
+\end{itemize}
+
+\subsection{Step 1: Deform Particles}
+
+\begin{align}
+\mathbf{P}_{deformed} &= \mathbf{P}_{mean} + w_1 \sqrt{\lambda_1} \mathbf{v}_1 \\
+&= \begin{bmatrix} 0 & 0 \\ 1 & 0 \\ 0.5 & 1 \end{bmatrix} + 2.0 \times \sqrt{0.25} \times \begin{bmatrix} 0.1 & 0 \\ 0.1 & 0 \\ 0 & 0.2 \end{bmatrix} \\
+&= \begin{bmatrix} 0 & 0 \\ 1 & 0 \\ 0.5 & 1 \end{bmatrix} + \begin{bmatrix} 0.1 & 0 \\ 0.1 & 0 \\ 0 & 0.2 \end{bmatrix} \\
+&= \begin{bmatrix} 0.1 & 0 \\ 1.1 & 0 \\ 0.5 & 1.2 \end{bmatrix}
+\end{align}
+
+\subsection{Step 2: Particle Displacement}
+
+\begin{equation}
+\Delta \mathbf{P} = \mathbf{P}_{deformed} - \mathbf{P}_{mean} = \begin{bmatrix} 0.1 & 0 \\ 0.1 & 0 \\ 0 & 0.2 \end{bmatrix}
+\end{equation}
+
+\subsection{Step 3: Interpolate to Mesh Vertex}
+
+Consider a mesh vertex at $\mathbf{m} = [0.5, 0.3]$. Find 2 nearest particles:
+\begin{itemize}
+    \item Particle 1: distance $d_1 = 0.5$, displacement $\Delta \mathbf{P}_1 = [0.1, 0]$
+    \item Particle 3: distance $d_2 = 0.7$, displacement $\Delta \mathbf{P}_3 = [0, 0.2]$
+\end{itemize}
+
+Compute weights:
+\begin{align}
+w_1 &= \frac{1}{0.5} = 2.0, \quad w_2 = \frac{1}{0.7} \approx 1.43 \\
+\alpha_1 &= \frac{2.0}{2.0 + 1.43} \approx 0.583 \\
+\alpha_2 &= \frac{1.43}{2.0 + 1.43} \approx 0.417
+\end{align}
+
+Interpolated displacement:
+\begin{align}
+\Delta \mathbf{m} &= \alpha_1 \Delta \mathbf{P}_1 + \alpha_2 \Delta \mathbf{P}_3 \\
+&= 0.583 \times [0.1, 0] + 0.417 \times [0, 0.2] \\
+&= [0.058, 0.083]
+\end{align}
+
+Final deformed vertex:
+\begin{equation}
+\mathbf{m}_{deformed} = [0.5, 0.3] + [0.058, 0.083] = [0.558, 0.383]
+\end{equation}
+
+\section{Implementation}
+
+\subsection{Core Reconstruction Function}
+
+\begin{lstlisting}
+def reconstruct(self, weights):
+    # Step 1: Deform particles
+    particles_deformed = self.particles.copy()
+    for i, w in enumerate(weights):
+        particles_deformed += w * np.sqrt(self.eigenvalues[i]) * self.eigenvectors[i]
+    
+    # Step 2: Compute displacement
+    particle_displacement = particles_deformed - self.particles
+    mesh_deformed = self.mesh_vertices.copy()
+    
+    # Step 3: Interpolate to mesh
+    for i in range(len(self.mesh_vertices)):
+        displacement = np.sum(
+            particle_displacement[self.nearest_particles[i]] * 
+            self.interpolation_weights[i][:, np.newaxis],
+            axis=0
+        )
+        mesh_deformed[i] += displacement
+    
+    return mesh_deformed
+\end{lstlisting}
+
+\subsection{Building Deformation Map}
+
+\begin{lstlisting}
+def _build_deformation_map(self):
+    from scipy.spatial import cKDTree
+    tree = cKDTree(self.particles)
+    distances, indices = tree.query(self.mesh_vertices, k=3)
+    
+    # Inverse distance weighting
+    weights = 1.0 / (distances + 1e-10)
+    weights = weights / weights.sum(axis=1, keepdims=True)
+    
+    self.nearest_particles = indices
+    self.interpolation_weights = weights
+\end{lstlisting}
+
+\section{Variance Explained}
+
+Each mode captures a percentage of total variance:
+\begin{equation}
+\text{Variance}_i = \frac{\lambda_i}{\sum_{j=1}^{M} \lambda_j} \times 100\%
+\end{equation}
+
+Typically, the first few modes capture most variation:
+\begin{itemize}
+    \item Mode 0: $\sim$50\% (primary shape variation)
+    \item Mode 1: $\sim$20\% (secondary variation)
+    \item Mode 2: $\sim$10\% (tertiary variation)
+    \item Remaining modes: $<$20\%
+\end{itemize}
+
+\section{Interactive Visualization}
+
+The tool provides sliders for each mode with range $[-2, 2]$ representing $\pm 2\sigma$ (standard deviations). This covers approximately 95\% of natural shape variation.
+
+\subsection{Performance Optimization}
+
+\begin{itemize}
+    \item \textbf{Render-on-release}: Updates only when slider is released, not during drag
+    \item \textbf{Pre-computed mapping}: Nearest neighbors computed once during initialization
+    \item \textbf{Vectorized operations}: NumPy arrays for efficient computation
+\end{itemize}
+
+\section{Conclusion}
+
+The SSM deformation combines:
+\begin{enumerate}
+    \item PCA-based shape space representation
+    \item Particle-based correspondence
+    \item Inverse distance weighted interpolation
+    \item Interactive real-time visualization
+\end{enumerate}
+
+This enables intuitive exploration of anatomical shape variations captured by the statistical model.
+
+\end{document}

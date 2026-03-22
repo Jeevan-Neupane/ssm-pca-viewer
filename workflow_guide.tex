@@ -1,0 +1,821 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{geometry}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{mdframed}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{booktabs}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{fancyhdr}
+\usepackage{tocloft}
+
+\geometry{margin=1in}
+
+\definecolor{shapeworksblue}{RGB}{30, 100, 180}
+\definecolor{codegray}{RGB}{245, 245, 245}
+\definecolor{notegreen}{RGB}{0, 120, 60}
+\definecolor{warnred}{RGB}{180, 30, 30}
+
+\lstset{
+    basicstyle=\ttfamily\small,
+    backgroundcolor=\color{codegray},
+    frame=single,
+    breaklines=true,
+    showstringspaces=false,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    tabsize=4
+}
+
+\titleformat{\section}{\large\bfseries\color{shapeworksblue}}{}{0em}{}[\titlerule]
+\titleformat{\subsection}{\normalsize\bfseries}{}{0em}{}
+
+% Header/Footer
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\textit{From ShapeWorks to Custom PCA Visualization}}
+\fancyhead[R]{\small\textit{Practical Workflow Guide}}
+\fancyfoot[C]{\thepage}
+
+\title{\textbf{From ShapeWorks to Custom PCA Visualization} \\[0.5em]
+\large A Step-by-Step Practical Workflow Guide}
+\author{NAAMII -- Statistical Shape Modeling Project}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{mdframed}[backgroundcolor=codegray, linecolor=shapeworksblue, linewidth=1.5pt]
+\textbf{What this project does in one sentence:} \\[0.3em]
+Take the PCA output files exported from ShapeWorks Studio, and build a custom interactive 3D viewer that lets you explore how a bone shape changes across statistical modes --- without needing ShapeWorks installed.
+\end{mdframed}
+
+\tableofcontents
+\newpage
+
+% ─────────────────────────────────────────────
+\section{Introduction}
+
+In medical imaging, we often want to understand how the shape of a bone (for example, a femur or pelvis) varies from person to person. Some people have longer bones, some have more curved ones, some have wider ones. If we collect CT or MRI scans from many patients, can we mathematically describe these shape differences?
+
+That is exactly what a \textbf{Statistical Shape Model (SSM)} does. It takes a collection of shapes, finds the ``average'' shape, and then finds the main directions in which shapes differ from that average. This is done using a mathematical technique called \textbf{Principal Component Analysis (PCA)}.
+
+\textbf{ShapeWorks Studio} is a software tool that builds these statistical shape models. However, once ShapeWorks has done its job and exported the results, we no longer need it. This project takes those exported result files and builds a lightweight, customizable Python viewer to explore the shape variations interactively.
+
+\begin{figure}[H]
+    \centering
+    % \includegraphics[width=0.9\textwidth]{images/project_overview_diagram.png}
+    \fbox{\parbox{0.85\textwidth}{\centering\vspace{3cm}\textbf{[IMAGE PLACEHOLDER]}\\Overview diagram showing the pipeline: CT Scans $\rightarrow$ ShapeWorks Studio $\rightarrow$ Exported PCA Files $\rightarrow$ Custom Python Viewer\vspace{3cm}}}
+    \caption{High-level overview of the project pipeline. ShapeWorks does the heavy computation (left side), and our custom viewer handles the visualization (right side).}
+    \label{fig:overview}
+\end{figure}
+
+% ─────────────────────────────────────────────
+\section{Background: What is a Statistical Shape Model?}
+
+Before we dive into the code and files, let us build some intuition about what a statistical shape model actually is.
+
+\subsection{The Problem}
+
+Imagine you have 50 CT scans of femur (thigh) bones from 50 different patients. Each bone is slightly different --- different length, different curvature, different thickness. If a doctor asks ``what are the main ways these bones differ from each other?'', how would you answer that in a precise, mathematical way?
+
+You cannot just compare bone images pixel by pixel because each scan is taken from a slightly different angle, position, and scale. We need a smarter representation.
+
+\subsection{The Solution: Correspondence Particles}
+
+ShapeWorks solves this by placing a fixed number of small points (called \textbf{correspondence particles}) on the surface of every bone. The key idea is:
+
+\begin{itemize}
+    \item Every bone gets the \textbf{same number} of particles (for example, 128 particles per bone).
+    \item The particles are placed at \textbf{anatomically matching locations} across all bones. So particle \#37 on one person's femur corresponds to roughly the same anatomical spot as particle \#37 on another person's femur.
+\end{itemize}
+
+Now, instead of comparing complicated 3D surfaces, we can compare simple lists of 3D coordinates. Each bone is just a list of 128 points in 3D space.
+
+\begin{figure}[H]
+    \centering
+    % \includegraphics[width=0.8\textwidth]{images/correspondence_particles.png}
+    \fbox{\parbox{0.85\textwidth}{\centering\vspace{4cm}\textbf{[IMAGE PLACEHOLDER]}\\Diagram showing correspondence particles placed on two different femur bones. Matching particles are connected by dotted lines to show they represent the same anatomical location.\vspace{4cm}}}
+    \caption{Correspondence particles on two different femur bones. Each numbered particle on Bone A corresponds to the same anatomical location as the same-numbered particle on Bone B.}
+    \label{fig:correspondence}
+\end{figure}
+
+\subsection{The Mean Shape}
+
+Once we have particles on all 50 bones, we compute the \textbf{mean shape} by simply averaging the coordinates of each particle across all subjects:
+
+\[
+\bar{P}_j = \frac{1}{N}\sum_{i=1}^{N} P_j^{(i)}
+\]
+
+where $P_j^{(i)}$ is the position of particle $j$ on subject $i$, and $N = 50$ is the number of subjects. The result $\bar{P}$ is the ``average'' bone --- a bone that no single patient actually has, but that represents the center of the population.
+
+\subsection{PCA: Finding the Main Directions of Variation}
+
+Now we ask: in what directions do bones deviate from this average? PCA answers this by finding the axes (called \textbf{modes}) along which the data varies the most.
+
+\begin{itemize}[itemsep=0.5em]
+    \item \textbf{Mode 0} captures the single biggest source of shape difference between subjects. For femur bones, this is often overall size --- some people simply have bigger bones than others.
+    \item \textbf{Mode 1} captures the next biggest independent variation. This might be the curvature or the angle of the bone neck.
+    \item \textbf{Mode 2, 3, 4, \ldots} capture progressively smaller and more subtle variations.
+\end{itemize}
+
+Each mode has two associated quantities:
+\begin{enumerate}
+    \item An \textbf{eigenvalue} ($\lambda_i$) --- a single number telling you how much variation this mode captures. Bigger eigenvalue means more important mode.
+    \item An \textbf{eigenvector} ($\mathbf{v}_i$) --- a direction vector that tells you \emph{how} each particle moves along this mode.
+\end{enumerate}
+
+\begin{figure}[H]
+    \centering
+    % \includegraphics[width=0.85\textwidth]{images/pca_modes_illustration.png}
+    \fbox{\parbox{0.85\textwidth}{\centering\vspace{4cm}\textbf{[IMAGE PLACEHOLDER]}\\Illustration showing Mode 0 (e.g., size variation: small bone $\leftrightarrow$ large bone), Mode 1 (e.g., curvature variation: straight $\leftrightarrow$ curved), and Mode 2 (e.g., width variation: narrow $\leftrightarrow$ wide). Each mode shown as a row of 5 shapes from $-2\sigma$ to $+2\sigma$.\vspace{4cm}}}
+    \caption{Visualization of the first three PCA modes. Each row shows how the bone shape changes as you move along that mode from $-2$ to $+2$ standard deviations.}
+    \label{fig:pca_modes}
+\end{figure}
+
+% ─────────────────────────────────────────────
+\section{Step 1 --- What ShapeWorks Does (Before This Project)}
+
+ShapeWorks Studio is a tool that takes a collection of bone segmentations (e.g., 50 femur scans from 50 patients) and performs the following steps automatically:
+
+\begin{enumerate}[itemsep=0.5em]
+    \item \textbf{Grooms the shapes} --- cleans up the raw segmentation masks, aligns them to a common coordinate frame, and prepares them for analysis.
+    \item \textbf{Places correspondence particles} --- puts the same number of particles on every shape, in anatomically matching locations across all shapes.
+    \item \textbf{Computes the mean shape} --- averages the particle positions across all subjects to get the ``average'' bone.
+    \item \textbf{Runs PCA} --- analyzes how particle positions vary across subjects to find the principal modes of variation.
+    \item \textbf{Exports the results} --- saves everything as plain text files that any program can read.
+\end{enumerate}
+
+\begin{mdframed}[backgroundcolor=codegray, linecolor=notegreen, linewidth=1.5pt]
+\textbf{Important:} You do \emph{not} need to understand the internals of ShapeWorks for this project. You only need its output files, which are described in the next section.
+\end{mdframed}
+
+\begin{figure}[H]
+    \centering
+    % \includegraphics[width=0.9\textwidth]{images/shapeworks_studio_screenshot.png}
+    \fbox{\parbox{0.85\textwidth}{\centering\vspace{4cm}\textbf{[IMAGE PLACEHOLDER]}\\Screenshot of ShapeWorks Studio interface showing the Analysis tab with PCA sliders and a 3D bone visualization.\vspace{4cm}}}
+    \caption{ShapeWorks Studio interface. The Analysis tab provides PCA sliders similar to what our custom viewer will replicate.}
+    \label{fig:shapeworks_studio}
+\end{figure}
+
+% ─────────────────────────────────────────────
+\section{Step 2 --- The Output Files from ShapeWorks}
+
+After running ShapeWorks, you export the PCA results into a dataset folder (for example, \texttt{data/dataset1/}). The exported files are plain text, which makes them easy to work with from any programming language.
+
+\subsection{File Descriptions}
+
+\begin{table}[H]
+\centering
+\renewcommand{\arraystretch}{1.4}
+\begin{tabular}{@{}lp{9.5cm}@{}}
+\toprule
+\textbf{File} & \textbf{What it contains} \\
+\midrule
+\texttt{particles.particles} & 3D coordinates of correspondence particles on the mean shape. Each line is one particle with three numbers: \texttt{x y z}. If there are 128 particles, the file has 128 lines. \\
+\texttt{mean.obj} or \texttt{mean.vtk} & The mean (average) bone mesh --- thousands of tiny triangles forming the smooth bone surface. This is a much denser representation than the particles. \\
+\texttt{eigen\_values.eval} & One number per line, one line per PCA mode. Larger value = more shape variation captured by that mode. \\
+\texttt{eigenvector0.eval}, \texttt{eigenvector1.eval}, \ldots & One file per PCA mode. Each file has the same number of lines as the particles file. Each line contains three numbers (\texttt{dx dy dz}) describing how that particle moves along this mode. \\
+\bottomrule
+\end{tabular}
+\caption{Summary of ShapeWorks export files and their contents.}
+\label{tab:files}
+\end{table}
+
+\subsection{What the Files Look Like Inside}
+
+Here is an example of what each file looks like when opened in a text editor:
+
+\begin{lstlisting}[title={\textbf{particles.particles} (128 particles, 3 coordinates each)}]
+-23.4521  15.8932  42.1203
+-22.1034  16.2341  41.8876
+-20.7892  17.1123  40.9954
+...
+(128 lines total, one per particle)
+\end{lstlisting}
+
+\begin{lstlisting}[title={\textbf{eigen\_values.eval} (one eigenvalue per mode)}]
+1247.3421
+  423.8912
+  187.2340
+   95.1123
+...
+(one line per mode, in decreasing order)
+\end{lstlisting}
+
+\begin{lstlisting}[title={\textbf{eigenvector0.eval} (displacement for each particle in Mode 0)}]
+ 0.0234 -0.0012  0.0891
+ 0.0198  0.0034  0.0823
+-0.0102  0.0156  0.0712
+...
+(128 lines, same count as particles)
+\end{lstlisting}
+
+\subsection{A Note on File Naming}
+
+\begin{mdframed}[backgroundcolor=codegray, linecolor=warnred, linewidth=1.5pt]
+\textbf{Warning --- inconsistent naming:} ShapeWorks does not enforce a fixed file naming convention. Different exports may produce names like \texttt{eignen\_vector0.eval}, \texttt{eigen\_vector20.eval}, or \texttt{eignenvector3 (1).eval}. Our project handles all of these naming variations automatically using pattern matching (regular expressions).
+\end{mdframed}
+
+The three datasets included in this project demonstrate this inconsistency:
+
+\begin{table}[H]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}llll@{}}
+\toprule
+& \textbf{Dataset 1} & \textbf{Dataset 2} & \textbf{Dataset 3} \\
+\midrule
+Mesh format & OBJ & VTK & VTK \\
+Number of modes & 9 & 15 & 8 \\
+Eigenvector naming & \texttt{eignen\_vector0} & \texttt{eigen\_vector20} & \texttt{eignenvector3 (1)} \\
+Eigenvalue naming & \texttt{eigen\_values} & \texttt{eigen\_values2} & \texttt{eigenvalue} \\
+\bottomrule
+\end{tabular}
+\caption{File naming differences across the three included datasets.}
+\label{tab:naming}
+\end{table}
+
+\begin{figure}[H]
+    \centering
+    % \includegraphics[width=0.7\textwidth]{images/data_folder_screenshot.png}
+    \fbox{\parbox{0.85\textwidth}{\centering\vspace{3cm}\textbf{[IMAGE PLACEHOLDER]}\\Screenshot of the \texttt{data/dataset1/} folder in a file explorer, showing all the exported files: \texttt{mean.obj}, \texttt{particles.particles}, \texttt{eigen\_values.eval}, \texttt{eignen\_vector0.eval} through \texttt{eignen\_vector8.eval}.\vspace{3cm}}}
+    \caption{Contents of the \texttt{data/dataset1/} folder showing all ShapeWorks export files.}
+    \label{fig:data_folder}
+\end{figure}
+
+% ─────────────────────────────────────────────
+\section{Step 3 --- Understanding PCA Mathematically}
+
+This section explains the math behind PCA-based shape reconstruction. The core idea is simple: any bone shape in our population can be described as the mean shape plus a weighted combination of the principal modes.
+
+\subsection{The Shape Reconstruction Formula}
+
+\begin{mdframed}[backgroundcolor=codegray, linecolor=shapeworksblue, linewidth=1.5pt]
+\textbf{Key Equation:}
+\begin{equation}
+\mathbf{P}_{\text{deformed}} = \underbrace{\bar{\mathbf{P}}}_{\text{mean particles}} + \sum_{i=0}^{M-1} \underbrace{w_i}_{\text{slider weight}} \cdot \underbrace{\sqrt{\lambda_i}}_{\text{scale factor}} \cdot \underbrace{\mathbf{v}_i}_{\text{eigenvector}}
+\label{eq:pca}
+\end{equation}
+\end{mdframed}
+
+Let us break down each term:
+
+\begin{itemize}[itemsep=0.5em]
+    \item $\bar{\mathbf{P}}$ is the \textbf{mean particle positions} --- an $N \times 3$ matrix where $N$ is the number of particles. This is loaded from \texttt{particles.particles}.
+
+    \item $M$ is the \textbf{number of PCA modes} (e.g., 9 for dataset1).
+
+    \item $w_i$ is the \textbf{weight} for mode $i$. This is what the slider controls in the viewer. When $w_i = 0$ for all modes, we see the mean shape. When $w_i = 2$, we move 2 standard deviations along mode $i$.
+
+    \item $\lambda_i$ is the \textbf{eigenvalue} for mode $i$, loaded from \texttt{eigen\_values.eval}. Taking the square root $\sqrt{\lambda_i}$ converts variance into standard deviation, which gives the correct physical scale.
+
+    \item $\mathbf{v}_i$ is the \textbf{eigenvector} for mode $i$, loaded from the corresponding eigenvector file. It is also an $N \times 3$ matrix that tells each particle which direction and how far to move.
+\end{itemize}
+
+\subsection{What the Slider Weights Mean}
+
+The weight $w_i$ is measured in units of standard deviations ($\sigma$):
+
+\begin{table}[H]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}cl@{}}
+\toprule
+\textbf{Slider value ($w_i$)} & \textbf{Meaning} \\
+\midrule
+$0$ & Mean shape (no deformation along this mode) \\
+$+1$ & One standard deviation above the mean along this mode \\
+$-1$ & One standard deviation below the mean along this mode \\
+$+2$ & Two standard deviations above (covers $\sim$95\% of population) \\
+$-2$ & Two standard deviations below (covers $\sim$95\% of population) \\
+$+3$ / $-3$ & Extreme variation (covers $\sim$99.7\%, may look unrealistic) \\
+\bottomrule
+\end{tabular}
+\caption{Interpretation of slider weight values in terms of standard deviations.}
+\label{tab:weights}
+\end{table}
+
+\subsection{Variance Explained}
+
+Each eigenvalue tells us how much of the total shape variation is captured by that mode. The percentage of variance explained by mode $i$ is:
+
+\begin{equation}
+\text{Variance explained by mode } i = \frac{\lambda_i}{\sum_{j=0}^{M-1} \lambda_j} \times 100\%
+\end{equation}
+
+Typically, the first few modes capture most of the variation:
+
+\begin{figure}[H]
+    \centering
+    % \includegraphics[width=0.7\textwidth]{images/eigenvalue_spectrum.png}
+    \fbox{\parbox{0.85\textwidth}{\centering\vspace{4cm}\textbf{[IMAGE PLACEHOLDER]}\\Bar chart showing individual variance explained per mode (blue bars) with a cumulative variance line (red). Mode 0 captures $\sim$50\%, Mode 1 $\sim$20\%, Mode 2 $\sim$10\%, and the remaining modes capture smaller amounts. The cumulative line reaches $\sim$95\% by mode 4--5.\vspace{4cm}}}
+    \caption{Eigenvalue spectrum for a typical dataset. The first 3--4 modes usually capture over 80\% of total shape variation. This plot is generated by \texttt{visualize\_ssm.py}.}
+    \label{fig:eigenvalue_spectrum}
+\end{figure}
+
+% ─────────────────────────────────────────────
+\section{Step 4 --- How the Viewer Deforms the Mesh}
+
+This is the most technically interesting part of the project. The PCA formula (Equation~\ref{eq:pca}) tells us how to move the \textbf{particles}, but the particles are sparse --- typically only 128 points. The actual bone mesh has \textbf{thousands of vertices} that form the smooth surface. So how do we deform the smooth mesh?
+
+The answer is \textbf{interpolation}: we figure out how the sparse particles moved, and then we ``spread'' that movement to the dense mesh vertices based on proximity.
+
+\subsection{The Deformation Pipeline}
+
+The full process has three steps:
+
+\begin{enumerate}[itemsep=1em]
+    \item \textbf{Step 1 --- Deform the particles using PCA:}
+
+    Apply Equation~\ref{eq:pca} to compute the new positions of all particles based on the current slider weights.
+
+    \item \textbf{Step 2 --- Compute particle displacements:}
+
+    For each particle, compute how far it moved from its mean position:
+    \[
+    \Delta \mathbf{P} = \mathbf{P}_{\text{deformed}} - \bar{\mathbf{P}}
+    \]
+
+    \item \textbf{Step 3 --- Interpolate displacements to mesh vertices:}
+
+    For each mesh vertex:
+    \begin{enumerate}[label=(\alph*)]
+        \item Find its $k = 3$ nearest particles (using a KD-tree for speed).
+        \item Compute interpolation weights using \textbf{Inverse Distance Weighting (IDW)} --- closer particles get more influence.
+        \item Apply the weighted average displacement to the mesh vertex.
+    \end{enumerate}
+\end{enumerate}
+
+\begin{figure}[H]
+    \centering
+    % \includegraphics[width=0.9\textwidth]{images/interpolation_diagram.png}
+    \fbox{\parbox{0.85\textwidth}{\centering\vspace{5cm}\textbf{[IMAGE PLACEHOLDER]}\\Diagram showing: (Left) Sparse particles on the bone surface with arrows indicating their PCA displacements. (Right) A zoomed-in view of one mesh vertex with lines connecting it to its 3 nearest particles. The line thickness represents the interpolation weight --- thicker line means closer particle with more influence.\vspace{5cm}}}
+    \caption{Interpolation from sparse particles to dense mesh vertices. Each mesh vertex borrows the displacement from its 3 nearest particles, weighted by inverse distance.}
+    \label{fig:interpolation}
+\end{figure}
+
+\subsection{Inverse Distance Weighting (IDW) --- The Math}
+
+For a mesh vertex $\mathbf{m}$, let $d_1, d_2, d_3$ be the distances to its 3 nearest particles, and let $\Delta \mathbf{P}_1, \Delta \mathbf{P}_2, \Delta \mathbf{P}_3$ be their displacements. The interpolation weights are:
+
+\begin{equation}
+\alpha_j = \frac{1/d_j}{\sum_{l=1}^{3} 1/d_l}, \quad j = 1, 2, 3
+\end{equation}
+
+A small constant $\epsilon = 10^{-10}$ is added to prevent division by zero:
+
+\begin{equation}
+\alpha_j = \frac{1/(d_j + \epsilon)}{\sum_{l=1}^{3} 1/(d_l + \epsilon)}
+\end{equation}
+
+The deformed mesh vertex is then:
+
+\begin{equation}
+\mathbf{m}_{\text{deformed}} = \mathbf{m}_{\text{mean}} + \sum_{j=1}^{3} \alpha_j \cdot \Delta \mathbf{P}_j
+\end{equation}
+
+\subsection{Why This Works}
+
+\begin{itemize}[itemsep=0.5em]
+    \item If a mesh vertex is very close to one particle, that particle's displacement dominates (its weight $\alpha$ is close to 1).
+    \item If a mesh vertex is equidistant from all 3 nearest particles, each contributes equally ($\alpha = 1/3$).
+    \item This produces smooth, natural-looking deformations across the entire bone surface.
+\end{itemize}
+
+\subsection{Performance Note}
+
+The nearest-neighbor lookup and weight computation are done \textbf{only once} when the viewer starts (during initialization). After that, applying the deformation is just a simple matrix multiplication, which is very fast. The viewer updates \textbf{on slider release} (not during dragging) to keep the interface responsive.
+
+\begin{figure}[H]
+    \centering
+    % \includegraphics[width=0.85\textwidth]{images/deformation_before_after.png}
+    \fbox{\parbox{0.85\textwidth}{\centering\vspace{4cm}\textbf{[IMAGE PLACEHOLDER]}\\Side-by-side comparison: (Left) Mean shape at $w_0 = 0$. (Middle) Shape at $w_0 = +2$ (Mode 0 positive). (Right) Shape at $w_0 = -2$ (Mode 0 negative). Arrows or color map show the displacement magnitude on the surface.\vspace{4cm}}}
+    \caption{Mesh deformation along Mode 0. The mean shape (center) is deformed in opposite directions by setting the Mode 0 weight to $+2$ and $-2$ standard deviations.}
+    \label{fig:deformation_comparison}
+\end{figure}
+
+% ─────────────────────────────────────────────
+\section{Step 5 --- A Worked Numerical Example}
+
+To make the math concrete, let us walk through a simplified 2D example.
+
+\subsection{Setup}
+
+Suppose we have:
+\begin{itemize}
+    \item 3 particles with mean positions: $\bar{\mathbf{P}} = \begin{bmatrix} 0 & 0 \\ 1 & 0 \\ 0.5 & 1 \end{bmatrix}$
+    \item 1 PCA mode with eigenvalue $\lambda_1 = 0.25$ and eigenvector $\mathbf{v}_1 = \begin{bmatrix} 0.1 & 0 \\ 0.1 & 0 \\ 0 & 0.2 \end{bmatrix}$
+    \item A slider weight of $w_1 = 2.0$
+\end{itemize}
+
+\subsection{Step 1: Deform the Particles}
+
+\begin{align}
+\mathbf{P}_{\text{deformed}} &= \bar{\mathbf{P}} + w_1 \cdot \sqrt{\lambda_1} \cdot \mathbf{v}_1 \\[0.5em]
+&= \begin{bmatrix} 0 & 0 \\ 1 & 0 \\ 0.5 & 1 \end{bmatrix} + 2.0 \times \sqrt{0.25} \times \begin{bmatrix} 0.1 & 0 \\ 0.1 & 0 \\ 0 & 0.2 \end{bmatrix} \\[0.5em]
+&= \begin{bmatrix} 0 & 0 \\ 1 & 0 \\ 0.5 & 1 \end{bmatrix} + 2.0 \times 0.5 \times \begin{bmatrix} 0.1 & 0 \\ 0.1 & 0 \\ 0 & 0.2 \end{bmatrix} \\[0.5em]
+&= \begin{bmatrix} 0 & 0 \\ 1 & 0 \\ 0.5 & 1 \end{bmatrix} + \begin{bmatrix} 0.1 & 0 \\ 0.1 & 0 \\ 0 & 0.2 \end{bmatrix} = \begin{bmatrix} 0.1 & 0 \\ 1.1 & 0 \\ 0.5 & 1.2 \end{bmatrix}
+\end{align}
+
+\subsection{Step 2: Compute Particle Displacements}
+
+\begin{equation}
+\Delta \mathbf{P} = \mathbf{P}_{\text{deformed}} - \bar{\mathbf{P}} = \begin{bmatrix} 0.1 & 0 \\ 0.1 & 0 \\ 0 & 0.2 \end{bmatrix}
+\end{equation}
+
+Particle 1 moved right by 0.1. Particle 2 moved right by 0.1. Particle 3 moved up by 0.2.
+
+\subsection{Step 3: Interpolate to a Mesh Vertex}
+
+Consider a mesh vertex at $\mathbf{m} = [0.5, 0.3]$. We find its 2 nearest particles:
+
+\begin{itemize}
+    \item \textbf{Particle 1} (at $[0, 0]$): distance $d_1 = \sqrt{0.5^2 + 0.3^2} \approx 0.583$, displacement $= [0.1, 0]$
+    \item \textbf{Particle 3} (at $[0.5, 1]$): distance $d_2 = \sqrt{0^2 + 0.7^2} = 0.7$, displacement $= [0, 0.2]$
+\end{itemize}
+
+Compute weights:
+\begin{align}
+w_1 &= \frac{1}{0.583} = 1.715, \quad w_2 = \frac{1}{0.7} = 1.429 \\[0.5em]
+\alpha_1 &= \frac{1.715}{1.715 + 1.429} = 0.546, \quad \alpha_2 = \frac{1.429}{1.715 + 1.429} = 0.454
+\end{align}
+
+Interpolated displacement:
+\begin{align}
+\Delta \mathbf{m} &= 0.546 \times [0.1,\ 0] + 0.454 \times [0,\ 0.2] \\
+&= [0.055,\ 0] + [0,\ 0.091] = [0.055,\ 0.091]
+\end{align}
+
+Final deformed vertex:
+\begin{equation}
+\boxed{\mathbf{m}_{\text{deformed}} = [0.5, 0.3] + [0.055, 0.091] = [0.555, 0.391]}
+\end{equation}
+
+\begin{figure}[H]
+    \centering
+    % \includegraphics[width=0.6\textwidth]{images/numerical_example_diagram.png}
+    \fbox{\parbox{0.85\textwidth}{\centering\vspace{4cm}\textbf{[IMAGE PLACEHOLDER]}\\2D diagram showing the 3 mean particles (blue dots), the deformed particles (red dots with arrows), the mesh vertex (green dot), dashed lines to its 2 nearest particles, and the final interpolated displacement (green arrow).\vspace{4cm}}}
+    \caption{Visual representation of the numerical example. Blue dots are mean particles, red dots are deformed particles, and the green dot is the mesh vertex that gets an interpolated displacement.}
+    \label{fig:numerical_example}
+\end{figure}
+
+% ─────────────────────────────────────────────
+\section{Step 6 --- Project File Structure}
+
+The project is organized as follows:
+
+\begin{lstlisting}[title={\textbf{Project directory tree}}]
+self_ssm/
+|-- data/
+|   |-- dataset1/            <-- ShapeWorks export (OBJ mesh, 9 modes)
+|   |   |-- mean.obj
+|   |   |-- particles.particles
+|   |   |-- eigen_values.eval
+|   |   |-- eignen_vector0.eval ... eignen_vector8.eval
+|   |-- dataset2/            <-- ShapeWorks export (VTK mesh, 15 modes)
+|   |   |-- mean2.vtk
+|   |   |-- eigen_values2.eval
+|   |   |-- eigen_vector20.eval ... eigen_vector214.eval
+|   |-- dataset3/            <-- ShapeWorks export (VTK mesh, 8 modes)
+|       |-- mean.vtk
+|       |-- particles.particles
+|       |-- eigenvalue.eval
+|       |-- eignenvector3 (1).eval ... eignenvector3 (8).eval
+|-- src/
+|   |-- config.py                 <-- Folder paths and configuration
+|   |-- shapeworks_viewer.py      <-- Interactive 3D viewer (main script)
+|   |-- visualize_ssm.py          <-- Batch plot generator
+|   |-- advanced_visualize.py     <-- Advanced visualization utilities
+|-- outputs/                      <-- Saved PNG plots go here
+|-- documentation.tex             <-- Mathematical documentation
+|-- workflow_guide.tex            <-- This file
+\end{lstlisting}
+
+\subsection{What Each Source File Does}
+
+\begin{table}[H]
+\centering
+\renewcommand{\arraystretch}{1.4}
+\begin{tabular}{@{}lp{10cm}@{}}
+\toprule
+\textbf{File} & \textbf{Purpose} \\
+\midrule
+\texttt{config.py} & Defines paths to the \texttt{data/} and \texttt{outputs/} directories. All other scripts import paths from here so that paths are defined in one place only. \\
+\texttt{shapeworks\_viewer.py} & The main interactive viewer. Loads a dataset, builds the deformation map, and opens a 3D window with PCA sliders. This is the script you run most often. \\
+\texttt{visualize\_ssm.py} & A batch visualization script. Generates static PNG plots (particles, mean shape, eigenvalue spectrum, mode variations) and saves them to \texttt{outputs/}. Also opens the interactive explorer. \\
+\texttt{advanced\_visualize.py} & Additional visualization utilities for more detailed analysis. \\
+\bottomrule
+\end{tabular}
+\caption{Purpose of each source file in the project.}
+\label{tab:source_files}
+\end{table}
+
+\begin{figure}[H]
+    \centering
+    % \includegraphics[width=0.5\textwidth]{images/project_structure_diagram.png}
+    \fbox{\parbox{0.85\textwidth}{\centering\vspace{3cm}\textbf{[IMAGE PLACEHOLDER]}\\A visual diagram of the project structure showing how data flows: \texttt{data/} folder feeds into \texttt{config.py} which is imported by both \texttt{shapeworks\_viewer.py} and \texttt{visualize\_ssm.py}. Both scripts produce output either as interactive windows or saved PNGs in \texttt{outputs/}.\vspace{3cm}}}
+    \caption{Data flow diagram showing how the source files interact with the data and output directories.}
+    \label{fig:project_structure}
+\end{figure}
+
+% ─────────────────────────────────────────────
+\section{Step 7 --- How to Run the Project}
+
+\subsection{Prerequisites}
+
+Make sure you have the following Python packages installed:
+
+\begin{lstlisting}[title={\textbf{Required packages}}]
+pip install numpy matplotlib scipy
+\end{lstlisting}
+
+\begin{itemize}
+    \item \textbf{NumPy} --- for array operations and linear algebra.
+    \item \textbf{Matplotlib} --- for 3D plotting and interactive sliders.
+    \item \textbf{SciPy} --- for the KD-tree used in nearest-neighbor lookup.
+\end{itemize}
+
+\subsection{Running the Interactive Viewer}
+
+\begin{lstlisting}[title={\textbf{Launch the interactive viewer}}]
+cd E:\naamii\self_ssm
+python src/shapeworks_viewer.py
+\end{lstlisting}
+
+What happens when you run this:
+
+\begin{enumerate}[itemsep=0.5em]
+    \item The script scans the \texttt{data/} folder and lists all available dataset subfolders.
+    \item You are prompted to select a dataset by number:
+    \begin{lstlisting}[numbers=none]
+Available datasets:
+  1. dataset1
+  2. dataset2
+  3. dataset3
+
+Select dataset (1-3):
+    \end{lstlisting}
+    \item The viewer loads the mesh, particles, eigenvalues, and eigenvectors from the selected dataset.
+    \item It builds the deformation map (KD-tree nearest neighbor lookup).
+    \item An interactive 3D Matplotlib window opens with one slider per PCA mode.
+    \item Each slider is labeled with the mode number and its percentage of variance explained.
+\end{enumerate}
+
+\begin{figure}[H]
+    \centering
+    % \includegraphics[width=0.9\textwidth]{images/viewer_screenshot.png}
+    \fbox{\parbox{0.85\textwidth}{\centering\vspace{5cm}\textbf{[IMAGE PLACEHOLDER]}\\Screenshot of the interactive viewer window showing: a 3D bone point cloud in the main area, labeled sliders at the bottom (Mode 0, Mode 1, ..., each with variance percentage), and a Reset button at the bottom center.\vspace{5cm}}}
+    \caption{The interactive viewer window. The 3D bone visualization is shown at the top, with PCA mode sliders at the bottom. Each slider label shows the mode number and variance explained.}
+    \label{fig:viewer_screenshot}
+\end{figure}
+
+\subsection{Using the Viewer Controls}
+
+\begin{table}[H]
+\centering
+\renewcommand{\arraystretch}{1.4}
+\begin{tabular}{@{}lp{9cm}@{}}
+\toprule
+\textbf{Action} & \textbf{What it does} \\
+\midrule
+Drag a slider left/right & Adjusts the weight ($w_i$) for that PCA mode from $-2$ to $+2$ standard deviations. \\
+Release the slider & Triggers the mesh deformation and updates the 3D view. \\
+Click and drag the 3D view & Rotates the bone to view it from different angles. \\
+Scroll wheel on 3D view & Zooms in and out. \\
+Click the \textbf{Reset} button & Sets all sliders back to 0 (returns to the mean shape). \\
+\bottomrule
+\end{tabular}
+\caption{Interactive viewer controls.}
+\label{tab:controls}
+\end{table}
+
+\subsection{Running the Batch Visualizer}
+
+\begin{lstlisting}[title={\textbf{Generate static plots}}]
+cd E:\naamii\self_ssm
+python src/visualize_ssm.py
+\end{lstlisting}
+
+This script generates and saves the following plots to the \texttt{outputs/} folder:
+
+\begin{enumerate}
+    \item \textbf{Particle distribution plot} --- shows where the correspondence particles are located in 3D space.
+    \item \textbf{Mean shape plot} --- the average bone shape as a point cloud.
+    \item \textbf{Eigenvalue spectrum plot} --- bar chart showing variance explained per mode with cumulative line.
+    \item \textbf{Mode variation plots} --- for each of the first 3 modes, shows 5 shapes ranging from $-2\sigma$ to $+2\sigma$.
+\end{enumerate}
+
+\begin{figure}[H]
+    \centering
+    % \includegraphics[width=0.9\textwidth]{images/batch_outputs_grid.png}
+    \fbox{\parbox{0.85\textwidth}{\centering\vspace{5cm}\textbf{[IMAGE PLACEHOLDER]}\\A 2$\times$2 grid showing the four types of plots generated by \texttt{visualize\_ssm.py}: (Top-left) Particle distribution --- blue dots in 3D. (Top-right) Mean shape --- red point cloud. (Bottom-left) Eigenvalue spectrum --- bar chart with cumulative line. (Bottom-right) Mode 0 variation --- row of 5 shapes from $-2\sigma$ to $+2\sigma$.\vspace{5cm}}}
+    \caption{Example output plots generated by the batch visualizer script.}
+    \label{fig:batch_outputs}
+\end{figure}
+
+% ─────────────────────────────────────────────
+\section{Step 8 --- Understanding the Code}
+
+This section walks through the key parts of the code so you can understand and modify it.
+
+\subsection{Loading Data (\texttt{shapeworks\_viewer.py})}
+
+The \texttt{ShapeWorksStyleViewer} class handles all data loading in its constructor:
+
+\begin{lstlisting}[language=Python, title={\textbf{Constructor --- loading all data}}]
+class ShapeWorksStyleViewer:
+    def __init__(self, data_dir, mean_file='mean.obj'):
+        self.data_dir = data_dir
+        # Load the 3D particle coordinates (N x 3 array)
+        self.particles = np.loadtxt(
+            os.path.join(data_dir, 'particles.particles'))
+        # Load the mesh vertices (thousands of points)
+        self.mesh_vertices = self._load_mesh(
+            os.path.join(data_dir, mean_file))
+        # Load eigenvalues (one per mode)
+        self.eigenvalues = np.loadtxt(eval_files[0])
+        # Load eigenvectors (list of N x 3 arrays)
+        self.eigenvectors = self._load_eigenvectors()
+        # Build KD-tree for nearest neighbor interpolation
+        self._build_deformation_map()
+\end{lstlisting}
+
+\subsection{Flexible Eigenvector Loading}
+
+Because ShapeWorks exports use inconsistent naming, the eigenvector loader uses pattern matching:
+
+\begin{lstlisting}[language=Python, title={\textbf{Flexible eigenvector file discovery}}]
+def _load_eigenvectors(self):
+    # Find ALL .eval files in the data directory
+    all_files = glob.glob(os.path.join(self.data_dir, '*.eval'))
+    # Keep only files with 'vector' in the name
+    vector_files = [f for f in all_files
+                    if 'vector' in os.path.basename(f).lower()]
+    # Sort by extracting the number from the filename
+    vector_files.sort(key=extract_number)
+    # Load each file as a NumPy array
+    return [np.loadtxt(f) for f in vector_files]
+\end{lstlisting}
+
+\subsection{The Core Reconstruction Function}
+
+This is where Equation~\ref{eq:pca} is implemented:
+
+\begin{lstlisting}[language=Python, title={\textbf{PCA shape reconstruction}}]
+def reconstruct(self, weights):
+    # Start from mean particle positions
+    particles_deformed = self.particles.copy()
+    # Add weighted contribution from each mode
+    for i, w in enumerate(weights):
+        particles_deformed += (w * np.sqrt(self.eigenvalues[i])
+                               * self.eigenvectors[i])
+    # Compute how much each particle moved
+    particle_displacement = particles_deformed - self.particles
+    # Interpolate displacements to mesh vertices
+    mesh_deformed = self.mesh_vertices.copy()
+    for i in range(len(self.mesh_vertices)):
+        displacement = np.sum(
+            particle_displacement[self.nearest_particles[i]]
+            * self.interpolation_weights[i][:, np.newaxis],
+            axis=0)
+        mesh_deformed[i] += displacement
+    return mesh_deformed
+\end{lstlisting}
+
+\subsection{Building the Deformation Map}
+
+The deformation map is built once using SciPy's KD-tree:
+
+\begin{lstlisting}[language=Python, title={\textbf{KD-tree for nearest neighbor interpolation}}]
+def _build_deformation_map(self):
+    from scipy.spatial import cKDTree
+    # Build a spatial index from the particle positions
+    tree = cKDTree(self.particles)
+    # For each mesh vertex, find its 3 nearest particles
+    distances, indices = tree.query(self.mesh_vertices, k=3)
+    # Compute inverse distance weights
+    weights = 1.0 / (distances + 1e-10)
+    weights = weights / weights.sum(axis=1, keepdims=True)
+    # Store for later use during reconstruction
+    self.nearest_particles = indices
+    self.interpolation_weights = weights
+\end{lstlisting}
+
+% ─────────────────────────────────────────────
+\section{Step 9 --- Adding a New Dataset}
+
+To add your own ShapeWorks export to this project:
+
+\begin{enumerate}[itemsep=0.5em]
+    \item \textbf{Create a new folder} inside \texttt{data/}, for example \texttt{data/my\_new\_bone/}.
+
+    \item \textbf{Copy the ShapeWorks export files} into this folder:
+    \begin{itemize}
+        \item The mean mesh file (\texttt{.obj} or \texttt{.vtk}) --- must have ``mean'' in its name.
+        \item The particles file (\texttt{.particles}).
+        \item The eigenvalue file (\texttt{.eval}) --- must have ``value'' in its name.
+        \item The eigenvector files (\texttt{.eval}) --- must have ``vector'' in their names.
+    \end{itemize}
+
+    \item \textbf{Run the viewer} --- your new dataset will appear automatically in the dataset selection list.
+\end{enumerate}
+
+\begin{mdframed}[backgroundcolor=codegray, linecolor=notegreen, linewidth=1.5pt]
+\textbf{Tip:} You do not need to modify any code or configuration files. The viewer discovers datasets automatically by scanning the \texttt{data/} directory.
+\end{mdframed}
+
+\begin{figure}[H]
+    \centering
+    % \includegraphics[width=0.7\textwidth]{images/adding_dataset_flowchart.png}
+    \fbox{\parbox{0.85\textwidth}{\centering\vspace{3cm}\textbf{[IMAGE PLACEHOLDER]}\\Simple flowchart: (1) Export from ShapeWorks $\rightarrow$ (2) Create folder in \texttt{data/} $\rightarrow$ (3) Copy files $\rightarrow$ (4) Run viewer $\rightarrow$ (5) New dataset appears in selection list.\vspace{3cm}}}
+    \caption{Steps to add a new dataset to the project.}
+    \label{fig:adding_dataset}
+\end{figure}
+
+% ─────────────────────────────────────────────
+\section{Step 10 --- Key Differences from ShapeWorks Studio}
+
+\begin{table}[H]
+\centering
+\renewcommand{\arraystretch}{1.4}
+\begin{tabular}{@{}lp{5.5cm}p{5.5cm}@{}}
+\toprule
+\textbf{Aspect} & \textbf{ShapeWorks Studio} & \textbf{This Project} \\
+\midrule
+Purpose & Full SSM pipeline (grooming, optimization, analysis) & Visualization and exploration only \\
+Input & Raw segmentation masks (NRRD, NIfTI) & Pre-computed PCA export files (plain text) \\
+Dependency & ShapeWorks installation (large, platform-specific) & Python + NumPy + Matplotlib + SciPy (lightweight, cross-platform) \\
+Rendering & VTK-based surface rendering & Matplotlib 3D scatter plot \\
+Customization & Limited to built-in options & Full control --- modify any aspect of the code \\
+Batch processing & Not easily scriptable & Fully scriptable (generate plots for all modes automatically) \\
+File format handling & Fixed naming expected & Flexible --- handles inconsistent naming automatically \\
+\bottomrule
+\end{tabular}
+\caption{Comparison between ShapeWorks Studio and this custom viewer project.}
+\label{tab:comparison}
+\end{table}
+
+\vspace{1em}
+
+This project is intentionally lightweight --- it does not recompute any statistics. It purely reads the PCA results that ShapeWorks already computed and gives you a flexible, scriptable viewer built entirely in Python. This makes it ideal for:
+
+\begin{itemize}
+    \item Presenting results in meetings or reports without needing ShapeWorks installed.
+    \item Generating publication-quality plots of shape variations.
+    \item Customizing the visualization (colors, angles, labels) to match your needs.
+    \item Sharing results with collaborators who do not have ShapeWorks.
+\end{itemize}
+
+% ─────────────────────────────────────────────
+\section{Troubleshooting}
+
+\begin{table}[H]
+\centering
+\renewcommand{\arraystretch}{1.5}
+\begin{tabular}{@{}p{5cm}p{9cm}@{}}
+\toprule
+\textbf{Problem} & \textbf{Solution} \\
+\midrule
+``No datasets found'' error & Make sure your dataset folder is inside \texttt{data/} and contains the required files. \\
+``No mean shape files found'' & The mesh file must have ``mean'' in its name (e.g., \texttt{mean.obj}, \texttt{mean2.vtk}). \\
+Viewer is very slow & This usually means the mesh has too many vertices. The scatter-plot renderer is not optimized for meshes with $>$50,000 points. \\
+Shape looks wrong or exploded & Check that the eigenvector files match the particles file (same number of rows). Also check that you are not at extreme slider values ($>$3$\sigma$). \\
+Slider does not update the shape & Remember that updates happen on slider \emph{release}, not during dragging. Click and release the slider. \\
+\texttt{ModuleNotFoundError: scipy} & Install SciPy: \texttt{pip install scipy}. \\
+\bottomrule
+\end{tabular}
+\caption{Common problems and their solutions.}
+\label{tab:troubleshooting}
+\end{table}
+
+% ─────────────────────────────────────────────
+\section{Summary}
+
+\begin{mdframed}[backgroundcolor=codegray, linecolor=shapeworksblue, linewidth=1.5pt]
+\textbf{What we covered in this guide:}
+\begin{enumerate}[itemsep=0.3em]
+    \item \textbf{Background} --- What statistical shape models are and why they are useful for understanding anatomical variation.
+    \item \textbf{ShapeWorks' role} --- It builds the model and exports the results; we only need the export files.
+    \item \textbf{Output files} --- Plain text files containing particles, mesh, eigenvalues, and eigenvectors.
+    \item \textbf{PCA math} --- The reconstruction formula: mean $+$ weighted sum of scaled eigenvectors.
+    \item \textbf{Mesh deformation} --- Inverse distance weighted interpolation from sparse particles to dense mesh.
+    \item \textbf{Numerical example} --- A concrete step-by-step calculation.
+    \item \textbf{Project structure} --- How the code and data are organized.
+    \item \textbf{Running the tools} --- How to launch the interactive viewer and batch visualizer.
+    \item \textbf{Code walkthrough} --- Key functions explained with annotations.
+    \item \textbf{Adding datasets} --- How to bring in new ShapeWorks exports.
+    \item \textbf{Troubleshooting} --- Solutions to common problems.
+\end{enumerate}
+\end{mdframed}
+
+\end{document}

@@ -189,16 +189,3 @@ v x2 y2 z2
 value1
 value2
 ...
-```
-
-## Citation
-
-If you use this visualization tool in your research, please cite your SSM generation method and this tool.
-
-## License
-
-MIT License - Feel free to modify and distribute.
-
-## Contact
-
-For issues or questions, please open an issue on the repository.
